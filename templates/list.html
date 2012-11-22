@@ -1,0 +1,26 @@
+<table width="100%" style="font:85% Arial,Helvetica,sans-serif;">
+    <tr>
+        <td width="10%">&nbsp;</td>
+        <td>
+            <h1>
+            Devel::YCallTrace logs 
+            </h1>
+            <br>
+            [% FOR date = log_by_date.keys.sort.reverse() %]
+            <h2>[%date%]</h2>
+            [% FOR rec = log_by_date.$date.reverse() %]
+            <a href="/log/[% rec.reqid %]">
+                [% rec.reqid %]</a>
+                [% rec.logtime %]
+                [% rec.title %]
+            <br>
+            [% END %]
+            [% END %]
+            [% FOR reqid = reqids %]
+            <a href="/log/[% reqid %]">[% reqid %]</a><br>
+            [% END %]
+            <br>
+        </td>
+    </tr>
+</table>
+

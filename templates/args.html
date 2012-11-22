@@ -1,0 +1,26 @@
+<style>
+.args td {
+    border: 1px solid #aaa;
+    padding: 5px;
+}
+.args td div {
+    overflow: auto;
+    max-height: 200px;
+    max-width: 600px;
+}
+</style>
+[% BLOCK dump_text %]
+<pre style='font-size:1em;text-align:left;'>[% text | html %]</pre>
+[% END %]
+<table width=90% cellpadding=5 cellspacing=0 class=args>
+    <tr>
+        <td width=50%><b>Params</b></td>
+        [% IF args_after_call %]<td width=50%><b>Params after the call</b></td>[% END %]
+        <td width=50%><b>Return value</b></td>
+    </tr>
+    <tr style="vertical-align: top;">
+        <td><div>[% INCLUDE dump_text text=args %]</div></td>
+        [% IF args_after_call %]<td><div>[% INCLUDE dump_text text=args_after_call %]</div></td>[% END %]
+        <td><div>[% INCLUDE dump_text text=ret %]</div></td>
+    </tr>
+</table>
