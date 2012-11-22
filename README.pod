@@ -1,0 +1,32 @@
+=head1 NAME
+
+Devel::YCallTrace - Track and report function calls
+
+=head1 SYNOPSIS
+
+  require Devel::YCallTrace;
+  
+  Devel::YCallTrace::init();
+
+  Devel::YCallTrace::init( title => $0.join("", map {" $_"} @ARGV) );
+
+=head1 DESCRIPTION
+
+Devel::YCallTrace traces function calls and then present a nice html report. 
+
+First, the Devel::YCallTrace module is used and instantiated.
+
+  require Devel::YCallTrace;
+  
+  Devel::YCallTrace::init();
+
+
+The log goes into SQLite database /tmp/y_call_trace/yct.db
+
+To view the report, run 
+
+  yct_view.pl 
+
+and point your browser to the url shown.
+
+=cut
