@@ -9,41 +9,123 @@ use POSIX qw/strftime/;
 use Data::Dumper;
 use DateTime;
 use FindBin qw/$Bin/;
+use Aspect;
 
-use Devel::YCallTrace::RoutinesWrapper;
 use Devel::YCallTrace::Compress;
 
+our $VERSION = '0.02';
+
+our $TABLES_FORMAT = '002';
 
 our $REQID;
 our $TABLE;
-our @CALL_REC;
 our @LOG;
 our $dbh;
+our $STARTED;
 our $FINISHED;
+our $DISABLE;
+
+our $CALL_ID_COUNTER;
+our $PARENT_CALL_ID;
 
 BEGIN {
 }
 
+
 END {
-    unless ($FINISHED){
-        local $Devel::YCallTrace::RoutinesWrapper::DISABLE = 1;
+    if ($STARTED && !$FINISHED){
+        local $DISABLE = 1;
         _insert_log();
     }
 }
 
 our $ROOT = Cwd::realpath(File::Basename::dirname($Bin));
 
+
 sub finish {
-    $Devel::YCallTrace::RoutinesWrapper::DISABLE = 1;
-    _insert_log();
-    $FINISHED = 1;
+    if ($STARTED && !$FINISHED){
+        $DISABLE = 1;
+        _insert_log();
+        $FINISHED = 1;
+    }
 }
 
 
 sub init {
+    die "won't do duplicate init()" if $STARTED;
     my (%O) = @_;
     $REQID = $O{reqid} || time();
-    my $to_trace = $O{to_trace} || [ $ROOT ];
+    @LOG = ();
+
+    _init_db(%O);
+    $STARTED = 1;
+
+    my $to_trace_pathes = $O{to_trace} || [ $ROOT ];
+    my $to_trace_pathes_re = @$to_trace_pathes > 0 ? join("|", @$to_trace_pathes) : '^$';
+    my $to_trace_packages = [
+        'main',
+        grep {/^[\w:]+$/}
+        map {s/\.pm$//; s/\//::/g; $_}
+        sort
+        grep { $INC{$_} =~ /($to_trace_pathes_re)/ && !/YCallTrace/ }
+        keys %INC
+    ];
+    my %trace = map {$_ => 1} @$to_trace_packages;
+
+    $CALL_ID_COUNTER = 0;
+    $PARENT_CALL_ID = 0;
+    around {
+        if ( $DISABLE ){
+            $_->proceed;
+            return;
+        }
+        my $args = my_dump($_->args);
+        my $call_id = ++$CALL_ID_COUNTER;
+        my $parent_call_id = $PARENT_CALL_ID;
+        local $PARENT_CALL_ID = $call_id;
+        my @call_rec = (
+            $REQID,
+            $call_id,
+            $parent_call_id,
+            strftime("%Y-%m-%d %H:%M:%S", localtime),
+            $_->package_name,
+            $_->short_name,
+            0,
+            $args,
+            undef,
+            undef
+        );
+
+        eval { $_->proceed };
+        my $error = $@;
+
+        my $args_dump = my_dump($_->args);
+        if ($args_dump ne $call_rec[-3]) {
+            $call_rec[-2] = $args_dump;
+        }
+
+        push @LOG, \@call_rec;
+
+        if ($error){
+            $call_rec[-4] = 1;
+            $call_rec[-1] = my_dump($error);
+            _insert_log();
+            die $error;
+        }
+
+        $call_rec[-1] = my_dump($_->return_value);
+       
+        _insert_log() if @LOG > 100;
+    } call sub {
+        (my $p = $_[0]) =~ s/::[^:]+$//;
+        return $trace{$p};
+    };
+}
+
+
+sub _init_db
+{
+    my (%O) = @_;
 
     if ( exists $O{dbh} ){
         $dbh = $O{dbh};
@@ -54,35 +136,9 @@ sub init {
         $dbh = DBI->connect("dbi:SQLite:dbname=$dbfile","","") or die "can't connect";
     }
 
-    @LOG = ();
-    my $to_trace_re = @$to_trace > 0 ? join("|", @$to_trace) : '^$';
-
-    #$Devel::YCallTrace::RoutinesWrapper::DEBUG=1;
-    no warnings 'once';
-    Devel::YCallTrace::RoutinesWrapper::init(
-        package => [
-        'main',
-            grep {/^[\w:]+$/}
-            map {s/\.pm$//; s/\//::/g; $_}
-            sort
-            grep {$INC{$_} =~ /($to_trace_re)/ && !/YCallTrace/ && !/RoutinesWrapper/}
-            keys %INC
-        ],
-        cond => sub {
-            return $_[1] !~ /need_.*_context/;
-        },
-        sub_struct => [],
-        handler => [ {
-            before => 'local @Devel::YCallTrace::CALL_REC = ();',
-                     }, {
-            before => \&before_call,
-            after => \&after_call,
-                     } ],
-        );
-    local $Devel::YCallTrace::RoutinesWrapper::DISABLE = 1;
     my $date = DateTime->today(time_zone => 'local')->strftime('%Y%m%d');
-    $TABLE = $dbh->quote_identifier("y_call_trace_$date");
-    my $meta_table = "y_call_trace_metadata";
+    $TABLE = $dbh->quote_identifier("y_call_trace_${date}_$TABLES_FORMAT");
+    my $meta_table = "y_call_trace_metadata_$TABLES_FORMAT";
     $dbh->do("
         CREATE TABLE IF NOT EXISTS $TABLE (
         reqid bigint unsigned not null,
@@ -91,6 +147,7 @@ sub init {
         logtime timestamp not null,
         package varchar(100) not null,
         func varchar(100) not null,
+        died int unsigned not null default 0,
         args mediumblob,
         args_after_call mediumblob,
         ret mediumblob,
@@ -114,10 +171,13 @@ sub init {
     my $comment = $O{comment} || '';
     my $highlight_func = $O{highlight_func} || '^$';
     $dbh->do("insert into $meta_table (reqid, date_suff, title, comment, highlight_func) values (?,?,?,?,?)", {}, $REQID, $date, $title, $comment, $highlight_func) or die $dbh->errstr;
+
+    return '';
 }
 
+
 sub _insert_log {
-    my @fields = qw(reqid call_id call_parent_id logtime package func args args_after_call ret);
+    my @fields = qw(reqid call_id call_parent_id logtime package func died args args_after_call ret);
     my $field_names_str = join(',', @fields);
     my $rows_count = scalar @fields;
 
@@ -133,45 +193,6 @@ sub _insert_log {
     @LOG = ();
 }
 
-sub before_call {
-    #print STDERR "before $Devel::YCallTrace::RoutinesWrapper::SUB_FUNC / $Devel::YCallTrace::RoutinesWrapper::SUB_PARENT_CALL_ID / $Devel::YCallTrace::RoutinesWrapper::SUB_CALL_ID\n";
-    #return;
-    my $args;
-    # TODO Tools::dd --избавиться
-    if ($Devel::YCallTrace::RoutinesWrapper::SUB_PACKAGE eq 'Tools' && $Devel::YCallTrace::RoutinesWrapper::SUB_FUNC eq 'dd'
-        && @Devel::YCallTrace::RoutinesWrapper::SUB_ARGS == 1 && !ref $Devel::YCallTrace::RoutinesWrapper::SUB_ARGS[0]
-    ) {
-        $args = $Devel::YCallTrace::RoutinesWrapper::SUB_ARGS[0];
-        $args = deflate(Encode::is_utf8($args) ? Encode::encode_utf8($args) : $args);
-    } else {
-        $args = my_dump(@Devel::YCallTrace::RoutinesWrapper::SUB_ARGS);
-    }    
-    @CALL_REC = (
-        $REQID,
-        $Devel::YCallTrace::RoutinesWrapper::SUB_CALL_ID,
-        $Devel::YCallTrace::RoutinesWrapper::SUB_PARENT_CALL_ID,
-        strftime("%Y-%m-%d %H:%M:%S", localtime),
-        $Devel::YCallTrace::RoutinesWrapper::SUB_PACKAGE,
-        $Devel::YCallTrace::RoutinesWrapper::SUB_FUNC,
-        $args,
-        undef,
-        undef
-        );
-}
-
-sub after_call {
-    #print STDERR "after $Devel::YCallTrace::RoutinesWrapper::SUB_FUNC / $Devel::YCallTrace::RoutinesWrapper::SUB_PARENT_CALL_ID / $Devel::YCallTrace::RoutinesWrapper::SUB_CALL_ID\n";
-
-    $CALL_REC[-1] =  my_dump(@Devel::YCallTrace::RoutinesWrapper::SUB_RET);
-
-    my $args_dump = my_dump(@Devel::YCallTrace::RoutinesWrapper::SUB_ARGS);
-    if ($args_dump ne $CALL_REC[-3]) {
-        $CALL_REC[-2] = $args_dump;
-    }
-
-    push @LOG, \@CALL_REC;
-    _insert_log() if @LOG > 100;
-}
 
 sub my_dump {
     my @data = @_;
@@ -191,22 +212,25 @@ Devel::YCallTrace - Track and report function calls
 
 =head1 SYNOPSIS
 
+fully automated mode (debugger style):
+
+  perl -d:YCallTraceDbg=your-main-function your-script
+
+  perl -d:YCallTraceDbg=main::run sample_scripts/fib_random_die.pl 9
+
+or explicit initialization in your script:
+
   require Devel::YCallTrace;
-  
   Devel::YCallTrace::init();
 
+or
+
+  require Devel::YCallTrace;
   Devel::YCallTrace::init( title => $0.join("", map {" $_"} @ARGV) );
 
 =head1 DESCRIPTION
 
-Devel::YCallTrace traces function calls and then present a nice html report. 
-
-First, the Devel::YCallTrace module is used and instantiated.
-
-  require Devel::YCallTrace;
-  
-  Devel::YCallTrace::init();
-
+B<Devel::YCallTrace> traces function calls and then present a nice html report. 
 
 The log goes into SQLite database /tmp/y_call_trace/yct.db
 
@@ -214,7 +238,19 @@ To view the report, run
 
   yct_view.pl 
 
-and point your brouser to the url shown.
+and point your browser to the url shown.
+
+Note that at the moment there are two modules: B<Devel::YCallTrace> and B<Devel::YCallTraceDbg>.
+B<Devel::YCallTrace> do the main job using L<Aspect>. 
+B<Devel::YCallTraceDbg> is a simple frontend to B<Devel::YCallTrace> 
+to make it possible to use it like a custom debugger (-d:YCallTraceDbg). 
+
+I don't particularly like this system of two modules, 
+but I haven't found another appropriate and reliable way to initialize B<Devel::YCallTrace> 
+at the right moment when using it in automated mode
+(initialization must be done just before the beginning of execution).
+And I don't feel like using debugger hooks in B<Devel::YCallTrace>.
+Any advice how to resolve this conflict is welcome!
 
 =head1 METHODS
 
@@ -267,18 +303,21 @@ Devel::TraceMethods,
 Devel::TraceSubs, 
 Devel::TraceVars 
 
-=head1 COPYRIGHT
-
-Sergey Zhuravlev
-
-This is free software.
-It is licensed under the same terms as Perl itself.
-
 =head1 AUTHOR
 
-    The first version of the module was written by Sergey Zhuravlev (zhur at yandex-team dot ru)
-    
-    The maintainer now is Elena Bolshakova (helena at cpan dot org)
+Elena Bolshakova <helena at cpan.org>
+
+=head2 CONTRIBUTORS
+
+The first version of the module was written by Sergey Zhuravlev <zhur at yandex-team.ru>
+
+=head1 COPYRIGHT
+
+Copyright (c) 2012-2013 the Devel::YCallTrace L</AUTHOR> and L</CONTRIBUTORS> as listed above.
+
+=head1 LICENSE
+
+This library is free software and may be distributed under the same terms as perl itself.
 
 =cut
 

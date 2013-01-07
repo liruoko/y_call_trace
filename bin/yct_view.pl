@@ -16,6 +16,8 @@ use Devel::YCallTrace::Compress;
 
 use FindBin qw/$Bin/;
 
+our $TABLES_FORMAT = '002';
+
 our $dbh;
 our $template;
 
@@ -112,7 +114,7 @@ sub generate_list_page
 
     my $db_records = $dbh->selectall_arrayref( "
         SELECT reqid, logtime, date_suff, title, comment 
-        FROM y_call_trace_metadata
+        FROM y_call_trace_metadata_$TABLES_FORMAT
         "
     );
 
@@ -140,7 +142,7 @@ sub generate_log_page
 
     my $metadata_rec = $dbh->selectall_arrayref( "
         SELECT reqid, logtime, title, comment, highlight_func, date_suff 
-        FROM y_call_trace_metadata
+        FROM y_call_trace_metadata_$TABLES_FORMAT
         WHERE reqid = ?
         "
         , {}, $reqid
@@ -148,10 +150,10 @@ sub generate_log_page
     my %metadata;
     @metadata{qw/reqid logtime title comment highlight_func date/} = @{$metadata_rec->[0]}[0,1,2,3,4,5] if @$metadata_rec > 0;
 
-    my $table = $dbh->quote_identifier("y_call_trace_$metadata{date}");
+    my $table = $dbh->quote_identifier("y_call_trace_$metadata{date}_$TABLES_FORMAT");
 
     my $db_records = $dbh->selectall_arrayref( "
-        SELECT reqid, call_id, call_parent_id, logtime, package, func 
+        SELECT reqid, call_id, call_parent_id, logtime, package, func, died
         FROM $table
         WHERE reqid = ?
         ORDER BY call_id"
@@ -161,20 +163,20 @@ sub generate_log_page
     my $plain_log = [];
     for my $rec (@$db_records){
         my %pl;
-        @pl{qw/reqid call_id call_parent_id logtime package func/} = @$rec[0,1,2,3,4,5];
+        @pl{qw/reqid call_id call_parent_id logtime package func died/} = @$rec[0,1,2,3,4,5,6];
         $rec = undef;  
         push @$plain_log, \%pl;
     }
 
     my $main_log = [];
-        my %calls = map {$_->{call_id} => $_} @$plain_log;
-        for my $l (@$plain_log) {
-            if ($calls{$l->{call_parent_id}}) {
-                push @{$calls{$l->{call_parent_id}}->{childs}}, $l;
-            } else {
-                push @$main_log, $l;
-            }
+    my %calls = map {$_->{call_id} => $_} @$plain_log;
+    for my $l (@$plain_log) {
+        if ($calls{$l->{call_parent_id}}) {
+            push @{$calls{$l->{call_parent_id}}->{childs}}, $l;
+        } else {
+            push @$main_log, $l;
         }
+    }
 
     my $vars = {
         log => $main_log, 
@@ -191,13 +193,14 @@ sub generate_args_page
     my ($date, $reqid, $call_id) = @_;
     my $output = "";
 
-    my $table = $dbh->quote_identifier("y_call_trace_$date");
+    my $table = $dbh->quote_identifier("y_call_trace_${date}_$TABLES_FORMAT");
 
     my $db_records = $dbh->selectall_arrayref( "
         SELECT 
             reqid, call_id, call_parent_id, logtime, 
             package, func, 
-            args, args_after_call, ret
+            args, args_after_call, 
+            ret, died
         FROM $table
         WHERE reqid = ?
         AND call_id = ?
@@ -207,7 +210,7 @@ sub generate_args_page
     my %args = ();
     if ( @$db_records > 0 ){
         my $rec = $db_records->[0];
-        @args{qw/reqid call_id call_parent_id logtime package func args args_after_call ret/} = @$rec[0,1,2,3,4,5,6,7,8];
+        @args{qw/reqid call_id call_parent_id logtime package func args args_after_call ret died/} = @$rec[0,1,2,3,4,5,6,7,8,9];
     }
     
     for my $name (qw/args args_after_call ret/) {

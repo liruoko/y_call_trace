@@ -1,7 +1,9 @@
 [% BLOCK display_log %]
 [% FOR l = log %]
 <div class="call_div_[% l.func | html %]">
-    <b style="color: [% IF l.func.match(metadata.highlight_func); '#880000'; ELSE; '#000000'; END %]">[% l.package %]::[% l.func %]</b>, [% l.logtime %],
+    <b style="color: [% IF l.func.match(metadata.highlight_func); '#880000'; ELSE; '#000000'; END %]"> [% l.package %]::[% l.func %]</b>, 
+    [% IF l.died %] <span style="color:#ff0000; font-weight:bold;">DIED</span> [% END %] 
+    [% l.logtime %],
     <a href="#" onclick="toggle_call_args('[% date.strftime("%Y-%m-%d") %]', '[% l.reqid %]', '[% l.call_id %]'); return false;" class="call_args">params</a>
     [%- IF l.childs %], <a href="#" onclick="$('#call_[% l.call_id %]').toggle();return false;">sub-calls</a>[% END -%]
     [%- %], <a href="#" onclick="hide_all('[% l.func | js | html %]');return false;">hide all [% l.func | html %]</a>
