@@ -10,6 +10,7 @@ use Data::Dumper;
 use DateTime;
 use FindBin qw/$Bin/;
 use Aspect;
+use B qw/svref_2object/;
 
 use Devel::YCallTrace::Compress;
 
@@ -48,6 +49,41 @@ sub finish {
         _insert_log();
         $FINISHED = 1;
     }
+}
+
+sub new
+{
+    my $class = shift;
+
+    init(@_); 
+    my $self = bless({}, $class);
+
+    return $self;
+}
+
+sub DESTROY
+{
+    finish();
+}
+
+
+# is subroutine $func defined in package $package (or is it just imported into $package from somewhere else)?
+sub _in_package {
+    my ($func, $package) = @_;
+    no strict 'refs';
+    my $cv = svref_2object(*{"${package}::$func"}{CODE});
+    return if not $cv->isa('B::CV') or $cv->GV->isa('B::SPECIAL');
+    return $cv->GV->STASH->NAME eq $package;
+}
+
+
+# is subroutine $func considered constant?
+sub _is_constant
+{
+    my ($func) = @_;
+    no strict 'refs';
+    my $x = svref_2object(*{$func}{CODE})->XSUBANY; 
+    return ref $x ? 1 : 0;
 }
 
 
@@ -117,8 +153,11 @@ sub init {
        
         _insert_log() if @LOG > 100;
     } call sub {
-        (my $p = $_[0]) =~ s/::[^:]+$//;
-        return $trace{$p};
+        my ($p, $f) = ($_[0] =~ /^(.*)::([^:]+)$/);
+        # don't trace imported subroutines -- they don't belong here
+        # don't trace constant subroutines -- they produce too many of 'constant subroutine redefined' warnings
+        # don't trace AUTOLOAD subroutines -- something strange happens sometimes
+        return $p && $trace{$p} && _in_package($f, $p) && !_is_constant("${p}::$f") && $f ne "AUTOLOAD";
     };
 }
 
@@ -275,6 +314,17 @@ Any advice how to resolve this conflict is welcome!
 
         highlight_func -- regex
         subroutines matching this regex will be highlighted in report
+
+    Tracing will be stopped && log will be written to DB in the END block or by an explicit call of Devel::YCallTrace::finish()
+
+=head2 new
+
+    my $yct_guard = Devel::YCallTrace->new();
+    
+    Takes the same parameters as init()
+
+    Returns guard object. 
+    Tracing will be stopped && log will be written to DB when the object goes out of scope.
 
 =head2 finish
 

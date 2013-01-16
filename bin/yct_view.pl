@@ -8,6 +8,7 @@ use DBI;
 use Template;
 use HTTP::Daemon;
 use HTTP::Status;
+use Encode;
 
 use FindBin qw/$Bin/;
 use lib "$Bin/../lib";
@@ -102,7 +103,7 @@ sub init_template
 sub response_text
 {
     my ($c, $text) = @_;
-    my $resp = HTTP::Response->new( 200, 'OK', [], $text );
+    my $resp = HTTP::Response->new( 200, 'OK', [], encode_utf8($text) );
     $c->send_response( $resp );
     return '';
 }
