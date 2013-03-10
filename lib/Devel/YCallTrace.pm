@@ -16,10 +16,11 @@ use Devel::YCallTrace::Compress;
 
 our $VERSION = '0.02';
 
-our $TABLES_FORMAT = '002';
+our $TABLES_FORMAT = '003';
 
 our $REQID;
 our $TABLE;
+our @IN_PROGRESS;
 our @LOG;
 our $dbh;
 our $STARTED;
@@ -34,10 +35,7 @@ BEGIN {
 
 
 END {
-    if ($STARTED && !$FINISHED){
-        local $DISABLE = 1;
-        _insert_log();
-    }
+    finish();
 }
 
 our $ROOT = Cwd::realpath(File::Basename::dirname($Bin));
@@ -46,6 +44,11 @@ our $ROOT = Cwd::realpath(File::Basename::dirname($Bin));
 sub finish {
     if ($STARTED && !$FINISHED){
         $DISABLE = 1;
+        for my $call_rec (@IN_PROGRESS){
+            $call_rec->[-5] = 1;
+            $call_rec->[-1] = my_dump($?);
+        }
+        push @LOG, @IN_PROGRESS;
         _insert_log();
         $FINISHED = 1;
     }
@@ -92,21 +95,28 @@ sub init {
     my (%O) = @_;
     $REQID = $O{reqid} || time();
     @LOG = ();
+    @IN_PROGRESS = ();
 
     _init_db(%O);
     $STARTED = 1;
 
-    my $to_trace_pathes = $O{to_trace} || [ $ROOT ];
-    my $to_trace_pathes_re = @$to_trace_pathes > 0 ? join("|", @$to_trace_pathes) : '^$';
-    my $to_trace_packages = [
-        'main',
+    for my $k (qw/packages namespaces paths/){
+        $O{$k} = [$O{$k}] if $O{$k} && !ref $O{$k};
+    }
+
+    my @paths = @{$O{paths} || []};
+    my $paths_re = @paths > 0 ? join("|", @paths) : '^$';
+    my @namespaces = @{$O{namespaces} || []};
+    my $trace_namespace = @namespaces > 0 ? "^".join("|", @namespaces) : '^$';
+
+    my %trace_package = (main => 1);
+    $trace_package{$_} = 1 for  
         grep {/^[\w:]+$/}
         map {s/\.pm$//; s/\//::/g; $_}
         sort
-        grep { $INC{$_} =~ /($to_trace_pathes_re)/ && !/YCallTrace/ }
-        keys %INC
-    ];
-    my %trace = map {$_ => 1} @$to_trace_packages;
+        grep { $INC{$_} =~ /($paths_re)/ && !/YCallTrace/ }
+        keys %INC;
+    $trace_package{$_} = 1 for @{$O{packages} || []};
 
     $CALL_ID_COUNTER = 0;
     $PARENT_CALL_ID = 0;
@@ -127,10 +137,12 @@ sub init {
             $_->package_name,
             $_->short_name,
             0,
+            0,
             $args,
             undef,
             undef
         );
+        push @IN_PROGRESS, \@call_rec;
 
         eval { $_->proceed };
         my $error = $@;
@@ -140,6 +152,7 @@ sub init {
             $call_rec[-2] = $args_dump;
         }
 
+        pop @IN_PROGRESS;
         push @LOG, \@call_rec;
 
         if ($error){
@@ -157,7 +170,7 @@ sub init {
         # don't trace imported subroutines -- they don't belong here
         # don't trace constant subroutines -- they produce too many of 'constant subroutine redefined' warnings
         # don't trace AUTOLOAD subroutines -- something strange happens sometimes
-        return $p && $trace{$p} && _in_package($f, $p) && !_is_constant("${p}::$f") && $f ne "AUTOLOAD";
+        return $p && ($trace_package{$p} || $p =~ /$trace_namespace/) && _in_package($f, $p) && !_is_constant("${p}::$f") && $f ne "AUTOLOAD";
     };
 }
 
@@ -186,6 +199,7 @@ sub _init_db
         logtime timestamp not null,
         package varchar(100) not null,
         func varchar(100) not null,
+        exited int unsigned not null default 0,
         died int unsigned not null default 0,
         args mediumblob,
         args_after_call mediumblob,
@@ -216,7 +230,7 @@ sub _init_db
 
 
 sub _insert_log {
-    my @fields = qw(reqid call_id call_parent_id logtime package func died args args_after_call ret);
+    my @fields = qw(reqid call_id call_parent_id logtime package func exited died args args_after_call ret);
     my $field_names_str = join(',', @fields);
     my $rows_count = scalar @fields;
 
@@ -253,9 +267,12 @@ Devel::YCallTrace - Track and report function calls
 
 fully automated mode (debugger style):
 
-  perl -d:YCallTraceDbg=your-main-function your-script
+  perl -d:YCallTraceDbg=namespaces,App::Ack /usr/bin/ack-grep init
+  perl '-d:YCallTraceDbg (namespaces=>["App::Ack"])' /usr/bin/ack-grep sub
 
-  perl -d:YCallTraceDbg=main::run sample_scripts/fib_random_die.pl 9
+  perl -d:YCallTraceDbg=namespaces,MyProject my-script
+
+  perl -d:YCallTraceDbg  sample_scripts/fib_random_die.pl 9
 
 or explicit initialization in your script:
 
@@ -309,11 +326,20 @@ Any advice how to resolve this conflict is welcome!
         dbh -- database handle for writing collected data
         by default D::YCallTrace will try to use sqlite database /tmp/y_call_trace/yct.db
 
-        to_trace -- reference to an array of regexes;
-        Devel::YCallTrace will trace subroutines calls from modules whose path in %INC match one of these regexes;
-
         highlight_func -- regex
         subroutines matching this regex will be highlighted in report
+
+        options to specify what to trace: 
+
+        paths -- a string or a reference to an array of strings;
+        Devel::YCallTrace will trace subroutines calls from modules whose path in %INC match one of these regexes;
+
+        packages -- a string or a reference to an array of strings;
+        Devel::YCallTrace will trace subroutines defined in these packages
+
+        namespaces -- a string or a reference to an array of strings;
+        Devel::YCallTrace will trace subroutines defined in any package under these namespaces
+
 
     Tracing will be stopped && log will be written to DB in the END block or by an explicit call of Devel::YCallTrace::finish()
 

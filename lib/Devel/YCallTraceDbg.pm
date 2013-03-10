@@ -3,11 +3,11 @@ package Devel::YCallTraceDbg;
 use warnings;
 use strict;
 
-our $MAIN_FUNC;
+our @IMPORT;
 
 sub import {
     shift;
-    $MAIN_FUNC = shift || 'main::run';
+    @IMPORT = @_;
 }
 
 package DB;
@@ -29,9 +29,9 @@ sub DB {
 
 
 sub sub {
-    if ($Devel::YCallTraceDbg::MAIN_FUNC && $sub eq $Devel::YCallTraceDbg::MAIN_FUNC){
+    if (!$Devel::YCallTrace::STARTED && $sub=~/^main::[^:]+$/){
         require Devel::YCallTrace;
-        Devel::YCallTrace::init();
+        Devel::YCallTrace::init(@Devel::YCallTraceDbg::IMPORT);
     }
     no strict 'refs';
     return &{ $sub };

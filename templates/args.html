@@ -16,7 +16,7 @@
     <tr>
         <td width=50%><b>Params</b></td>
         [% IF args_after_call %]<td width=50%><b>Params after the call</b></td>[% END %]
-        <td width=50%><b>[% IF died %] $@ [% ELSE %] Return value [% END %]</b></td>
+        <td width=50%><b>[% IF died %] $@ [% ELSIF exited %] Exit code [% ELSE %] Return value [% END %]</b></td>
     </tr>
     <tr style="vertical-align: top;">
         <td><div>[% INCLUDE dump_text text=args %]</div></td>

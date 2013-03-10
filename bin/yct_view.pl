@@ -17,7 +17,7 @@ use Devel::YCallTrace::Compress;
 
 use FindBin qw/$Bin/;
 
-our $TABLES_FORMAT = '002';
+our $TABLES_FORMAT = '003';
 
 our $dbh;
 our $template;
@@ -154,7 +154,7 @@ sub generate_log_page
     my $table = $dbh->quote_identifier("y_call_trace_$metadata{date}_$TABLES_FORMAT");
 
     my $db_records = $dbh->selectall_arrayref( "
-        SELECT reqid, call_id, call_parent_id, logtime, package, func, died
+        SELECT reqid, call_id, call_parent_id, logtime, package, func, died, exited
         FROM $table
         WHERE reqid = ?
         ORDER BY call_id"
@@ -164,7 +164,7 @@ sub generate_log_page
     my $plain_log = [];
     for my $rec (@$db_records){
         my %pl;
-        @pl{qw/reqid call_id call_parent_id logtime package func died/} = @$rec[0,1,2,3,4,5,6];
+        @pl{qw/reqid call_id call_parent_id logtime package func died exited/} = @$rec[0,1,2,3,4,5,6,7];
         $rec = undef;  
         push @$plain_log, \%pl;
     }
@@ -201,7 +201,7 @@ sub generate_args_page
             reqid, call_id, call_parent_id, logtime, 
             package, func, 
             args, args_after_call, 
-            ret, died
+            ret, died, exited
         FROM $table
         WHERE reqid = ?
         AND call_id = ?
@@ -211,7 +211,7 @@ sub generate_args_page
     my %args = ();
     if ( @$db_records > 0 ){
         my $rec = $db_records->[0];
-        @args{qw/reqid call_id call_parent_id logtime package func args args_after_call ret died/} = @$rec[0,1,2,3,4,5,6,7,8,9];
+        @args{qw/reqid call_id call_parent_id logtime package func args args_after_call ret died exited/} = @$rec[0,1,2,3,4,5,6,7,8,9,10];
     }
     
     for my $name (qw/args args_after_call ret/) {
