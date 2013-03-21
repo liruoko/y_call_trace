@@ -18,7 +18,7 @@ or explicit initialization in your script:
 or
 
   require Devel::YCallTrace;
-  Devel::YCallTrace::init( title => $0.join("", map {" $_"} @ARGV) );
+  Devel::YCallTrace::init( title => "$0 @ARGV" );
 
 =head1 DESCRIPTION
 
